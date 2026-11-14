@@ -169,33 +169,30 @@ for article in new_articles:
 
         logscale_joined = "\n\n".join(data.get('logscale_queries', []))
         splunk_joined = "\n\n".join(data.get('splunk_queries', []))
-        
-        # Build report using a clean list of lines to completely bypass parser escapes
-        report_lines = [
-            "======================================================================",
-            f"[{data.get('severity')}] THREAT INTEL BRIEFING: {article['title']}",
-            "======================================================================",
-            f"• Threat Date        : {data.get('threat_date')} (Feed: {article['pub_date']})",
-            f"• Executive Summary  : {data.get('exec_summary')}",
-            f"• Campaign Status    : {data.get('is_new_campaign')}",
-            f"• Threat Actor       : {data.get('threat_group')}",
-            f"• Affected Tech/CVEs : {data.get('affected_tech_cves')}",
-            f"• Exploitation State : {data.get('exploitation_status')}",
-            f"• Scope & Impact     : {data.get('scope_impact')}",
-            f"• Target Sectors     : {data.get('countries_industries')}",
-            f"• MITRE ATT&CK       : {data.get('mitre_ttps')}",
-            f"• Recommended Action : {data.get('recommended_action')}",
-            f"• Affected Stock     : {stock_info}",
-            f"• Source URL         : {article['link']}",
-            "",
-            "--- LOGSCALE QUERIES ---",
-            logscale_joined,
-            "",
-            "--- SPLUNK QUERIES ---",
-            splunk_joined,
+
+        # Pure string concatenation - zero f-strings, zero parser traps
+        report_text = (
+            "======================================================================\n" +
+            "[" + str(data.get('severity', 'UNKNOWN')) + "] THREAT INTEL BRIEFING: " + str(article.get('title', '')) + "\n" +
+            "======================================================================\n" +
+            "• Threat Date        : " + str(data.get('threat_date', '')) + " (Feed: " + str(article.get('pub_date', '')) + ")\n" +
+            "• Executive Summary  : " + str(data.get('exec_summary', '')) + "\n" +
+            "• Campaign Status    : " + str(data.get('is_new_campaign', '')) + "\n" +
+            "• Threat Actor       : " + str(data.get('threat_group', '')) + "\n" +
+            "• Affected Tech/CVEs : " + str(data.get('affected_tech_cves', '')) + "\n" +
+            "• Exploitation State : " + str(data.get('exploitation_status', '')) + "\n" +
+            "• Scope & Impact     : " + str(data.get('scope_impact', '')) + "\n" +
+            "• Target Sectors     : " + str(data.get('countries_industries', '')) + "\n" +
+            "• MITRE ATT&CK       : " + str(data.get('mitre_ttps', '')) + "\n" +
+            "• Recommended Action : " + str(data.get('recommended_action', '')) + "\n" +
+            "• Affected Stock     : " + str(stock_info) + "\n" +
+            "• Source URL         : " + str(article.get('link', '')) + "\n\n" +
+            "--- LOGSCALE QUERIES ---\n" +
+            logscale_joined + "\n\n" +
+            "--- SPLUNK QUERIES ---\n" +
+            splunk_joined + "\n" +
             "======================================================================"
-        ]
-        report_text = "\n".join(report_lines)
+        )
         reports.append(report_text)
     except Exception as e:
         print(f"Error processing {article['link']}: {e}")
