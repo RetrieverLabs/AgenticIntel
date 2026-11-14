@@ -7,8 +7,7 @@ from email.message import EmailMessage
 import feedparser
 import requests
 import trafilatura
-from google import genai
-from google.genai import types
+from groq import Groq
 from pydantic import BaseModel, Field
 
 # Configuration: Free OSINT RSS feeds
@@ -73,8 +72,8 @@ if not new_articles:
     print("No new high-severity threat intel articles matching criteria. Exiting.")
     exit(0)
 
-# Initialize Gemini Client
-client = genai.Client()
+# Initialize Groq Client
+client = Groq(api_key=os.environ.get("GROQ_API_KEY"))
 
 class ThreatAnalysis(BaseModel):
     threat_date: str = Field(description="Date the threat/campaign was reported or first observed (YYYY-MM-DD format if possible)")
@@ -161,7 +160,13 @@ for i, article in enumerate(new_articles, 1):
         "| table _time, index, host, src_ip, Matched_Category, _raw"
     )
 
-    prompt = (
+    system_prompt = (
+        "You are an expert cyber security threat intelligence analyst and threat hunter. "
+        "Analyze the provided article and return valid JSON matching the required schema. "
+        "Ensure production-ready SIEM queries are written in LogScale and Splunk using exact syntax rules."
+    )
+
+    user_prompt = (
         "Analyze the following cyber security threat intelligence article for executive stakeholders and SOC threat hunters.\n"
         "Extract key IOCs or behavioral TTPs, and populate all executive briefing fields accurately.\n\n"
         "You must construct production-ready queries for CrowdStrike LogScale and Splunk modeled exactly after these templates:\n\n"
@@ -177,33 +182,35 @@ for i, article in enumerate(new_articles, 1):
     )
 
     try:
-        print(f"    -> Querying Gemini (gemini-3.8-flash)...")
+        print(f"    -> Querying Groq (llama-3.3-70b-versatile)...")
 
-        # Enhanced 429 & 503 Exponential Backoff Retry Loop
-        response = None
+        # Exponential Backoff Retry Loop for Groq
+        response_obj = None
         for attempt in range(4):
             try:
-                response = client.models.generate_content(
-                    model='gemini-3.8-flash',
-                    contents=prompt,
-                    config=types.GenerateContentConfig(
-                        response_mime_type="application/json",
-                        response_schema=ThreatAnalysis,
-                    ),
+                response_obj = client.chat.completions.create(
+                    model="llama-3.3-70b-versatile",
+                    messages=[
+                        {"role": "system", "content": system_prompt + f"\n\nReturn ONLY valid JSON matching this schema: {ThreatAnalysis.model_json_schema()}"},
+                        {"role": "user", "content": user_prompt}
+                    ],
+                    response_format={"type": "json_object"},
+                    temperature=0.1
                 )
                 break
             except Exception as api_err:
                 err_str = str(api_err)
-                if "429" in err_str or "503" in err_str or "Resource exhausted" in err_str:
+                if "429" in err_str or "503" in err_str or "Rate limit" in err_str:
                     if attempt == 3:
                         raise api_err
-                    wait_time = 10 * (2 ** attempt)  # 10s, 20s, 40s backoff
-                    print(f"    [!] Rate limited or busy (429/503). Retrying in {wait_time}s...")
+                    wait_time = 5 * (2 ** attempt)
+                    print(f"    [!] Rate limited or busy. Retrying in {wait_time}s...")
                     time.sleep(wait_time)
                 else:
                     raise api_err
 
-        data = json.loads(response.text)
+        raw_content = response_obj.choices[0].message.content
+        data = json.loads(raw_content)
         severity = data.get('severity', '').strip().upper()
         print(f"    -> Analysis generated successfully. Severity: {severity}")
 
@@ -242,10 +249,8 @@ for i, article in enumerate(new_articles, 1):
     except Exception as e:
         print(f"    [!] Error processing {article['link']}: {e}")
 
-    # --- BATCH PACING DELAY (15-18s) ---
-    pacing_delay = random.uniform(15.0, 18.0)
-    print(f"    [*] Pacing pause: waiting {pacing_delay:.1f}s before next article...")
-    time.sleep(pacing_delay)
+    # Brief pacing pause (Groq handles high throughput well, but a 2s pause is good hygiene)
+    time.sleep(2.0)
 
 with open(SEEN_FILE, "w") as f:
     json.dump({"seen": list(seen_urls)[-1000:]}, f)
