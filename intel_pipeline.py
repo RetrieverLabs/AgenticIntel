@@ -34,10 +34,12 @@ else:
 
 seen_urls = set(seen_data["seen"])
 
-# Stricter pre-filter keywords focused on critical severity and severe exploitation
+# Precision keywords: Severe RCE, 9+ CVSS, zero-days, enterprise edge, and financial tech
 KEYWORDS = [
     "critical", "cvss 9", "cvss 10", "rce", "remote code execution",
-    "zero-day", "0-day", "actively exploited", "ransomware", "supply chain"
+    "zero-day", "0-day", "actively exploited", "ransomware", "supply chain",
+    "banking", "financial", "payment", "authentication bypass", "auth bypass",
+    "vmware", "citrix", "palo alto", "cisco", "f5", "ivanti", "active directory"
 ]
 
 new_articles = []
@@ -48,8 +50,7 @@ for feed_url in FEEDS:
     parsed_feed = feedparser.parse(feed_url)
     print(f"    -> Found {len(parsed_feed.entries)} total entries in feed.")
     
-    # Sliced to top 3 for speed and noise reduction
-    for entry in parsed_feed.entries[:3]:
+    for entry in parsed_feed.entries[:5]: # Sliced slightly wider to catch fast-moving financial/enterprise news
         link = getattr(entry, "link", "")
         title = getattr(entry, "title", "")
         pub_date = getattr(entry, "published", getattr(entry, "updated", "Unknown Date"))
@@ -59,6 +60,11 @@ for feed_url in FEEDS:
         
         text_blob = f"{title} {getattr(entry, 'summary', '')}".lower()
         if any(kw in text_blob for kw in KEYWORDS):
+            # Skip ICS/OT/Manufacturing keywords at pre-filter level to eliminate noise immediately
+            if any(ot_kw in text_blob for ot_kw in ["siemens", "ruggedcom", "gridscale", "desigo", "scada", "ics", "plc", "manufacturing"]):
+                print(f"    [-] Skipping OT/Manufacturing match: {title[:60]}...")
+                continue
+                
             print(f"    [+] Match found: {title[:60]}...")
             new_articles.append({
                 "title": title,
@@ -66,7 +72,7 @@ for feed_url in FEEDS:
                 "pub_date": pub_date
             })
 
-print(f"\n[*] Total new unique articles matching critical criteria: {len(new_articles)}")
+print(f"\n[*] Total new unique articles matching financial/enterprise critical criteria: {len(new_articles)}")
 
 if not new_articles:
     print("No new high-severity threat intel articles matching criteria. Exiting.")
@@ -83,8 +89,8 @@ class ThreatAnalysis(BaseModel):
     threat_group: str = Field(description="Attribution/Threat actor if known, else 'Unknown'")
     affected_tech_cves: str = Field(description="Impacted software, appliances, packages, and CVE IDs (or 'N/A')")
     exploitation_status: str = Field(description="e.g., 'Actively Exploited in the Wild', 'PoC Public', 'Theoretical / Patched', or 'Unknown'")
-    scope_impact: str = Field(description="Brief scope and potential business/operational impact")
-    countries_industries: str = Field(description="Impacted countries and industries")
+    scope_impact: str = Field(description="Brief scope and potential business/operational impact on financial/enterprise systems")
+    countries_industries: str = Field(description="Impacted countries and industries (specifically noting Canada, US, UK financial sectors)")
     mitre_ttps: str = Field(description="Key MITRE ATT&CK IDs and names")
     recommended_action: str = Field(description="Concrete 1-sentence remediation or defensive action for stakeholders")
     logscale_queries: list[str] = Field(description="LogScale queries tailored to the threat, following the user's exact syntax structures")
@@ -96,7 +102,6 @@ for i, article in enumerate(new_articles, 1):
     seen_urls.add(article["link"])
     print(f"\n[*] Processing [{i}/{len(new_articles)}]: {article['title']}")
     
-    # Human-like browser headers & anti-bot evasion
     headers = {
         "User-Agent": random.choice(USER_AGENTS),
         "Accept": "text/html,application/xhtml+xml,application/xml;q=0.9,image/webp,*/*;q=0.8",
@@ -161,13 +166,15 @@ for i, article in enumerate(new_articles, 1):
     )
 
     system_prompt = (
-        "You are an expert cyber security threat intelligence analyst and threat hunter. "
+        "You are an expert cyber security threat intelligence analyst and threat hunter for a Canadian financial institution (ACME Finance). "
         "Analyze the provided article and return valid JSON matching the required schema. "
-        "Ensure production-ready SIEM queries are written in LogScale and Splunk using exact syntax rules."
+        "CRITICAL CONSTRAINT: Discard or rate as 'LOW' severity any ICS/OT/manufacturing advisories (e.g., Siemens, Schneider, SCADA, water treatment, building automation) "
+        "unless it directly impacts enterprise IT infrastructure, financial services, or banking networks. "
+        "Prioritize enterprise edge appliances, identity providers, hypervisors, and software libraries impacting Canadian/US/UK financial sectors."
     )
 
     user_prompt = (
-        "Analyze the following cyber security threat intelligence article for executive stakeholders and SOC threat hunters.\n"
+        "Analyze the following cyber security threat intelligence article for executive stakeholders and SOC threat hunters at a Canadian financial institution.\n"
         "Extract key IOCs or behavioral TTPs, and populate all executive briefing fields accurately.\n\n"
         "You must construct production-ready queries for CrowdStrike LogScale and Splunk modeled exactly after these templates:\n\n"
         "=== LOGSCALE IOC TEMPLATE ===\n" + logscale_ioc_template + "\n\n"
@@ -182,14 +189,13 @@ for i, article in enumerate(new_articles, 1):
     )
 
     try:
-        print(f"    -> Querying Groq (llama-3.3-70b-versatile)...")
+        print(f"    -> Querying Groq (openai/gpt-oss-120b)...")
 
-        # Exponential Backoff Retry Loop for Groq
         response_obj = None
         for attempt in range(4):
             try:
                 response_obj = client.chat.completions.create(
-                    model="openai/gpt-oss-120b",  # <--- Updated active model ID
+                    model="openai/gpt-oss-120b",
                     messages=[
                         {"role": "system", "content": system_prompt + f"\n\nReturn ONLY valid JSON matching this schema: {ThreatAnalysis.model_json_schema()}"},
                         {"role": "user", "content": user_prompt}
@@ -249,7 +255,6 @@ for i, article in enumerate(new_articles, 1):
     except Exception as e:
         print(f"    [!] Error processing {article['link']}: {e}")
 
-    # Brief pacing pause (Groq handles high throughput well, but a 2s pause is good hygiene)
     time.sleep(2.0)
 
 with open(SEEN_FILE, "w") as f:
@@ -258,7 +263,7 @@ with open(SEEN_FILE, "w") as f:
 if reports:
     print(f"\n[*] Preparing email digest containing {len(reports)} high-severity report(s)...")
     msg = EmailMessage()
-    msg['Subject'] = f"[Threat Intel Digest] {len(reports)} High/Critical Briefing(s) - {new_articles[0]['pub_date'][:16]}"
+    msg['Subject'] = f"[ACME Threat Intel Digest] {len(reports)} High/Critical Briefing(s) - {new_articles[0]['pub_date'][:16]}"
     msg['From'] = os.environ["GMAIL_USER"]
     msg['To'] = os.environ["GMAIL_RECIPIENT"]
     msg.set_content("\n".join(reports))
@@ -268,4 +273,4 @@ if reports:
         smtp.send_message(msg)
     print("[*] Threat intel digest emailed successfully.")
 else:
-    print("\n[*] No High/Critical reports generated. Skipping email.")
+    print("\n[*] No High/Critical reports generated matching financial/enterprise criteria. Skipping email.")
