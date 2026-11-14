@@ -167,52 +167,40 @@ for article in new_articles:
             except Exception:
                 stock_info = f"{ticker}: Lookup failed"
 
-        report_text = """
-======================================================================
-[{severity}] THREAT INTEL BRIEFING: {title}
-======================================================================
-• Threat Date        : {threat_date} (Feed: {pub_date})
-• Executive Summary  : {exec_summary}
-• Campaign Status    : {is_new_campaign}
-• Threat Actor       : {threat_group}
-• Affected Tech/CVEs : {affected_tech_cves}
-• Exploitation State : {exploitation_status}
-• Scope & Impact     : {scope_impact}
-• Target Sectors     : {countries_industries}
-• MITRE ATT&CK       : {mitre_ttps}
-• Recommended Action : {recommended_action}
-• Affected Stock     : {stock_info}
-• Source URL         : {link}
-
---- LOGSCALE QUERIES ---
-{logscale_queries}
-
---- SPLUNK QUERIES ---
-{splunk_queries}
-======================================================================
-""".format(
-            severity=data.get('severity'),
-            title=article['title'],
-            threat_date=data.get('threat_date'),
-            pub_date=article['pub_date'],
-            exec_summary=data.get('exec_summary'),
-            is_new_campaign=data.get('is_new_campaign'),
-            threat_group=data.get('threat_group'),
-            affected_tech_cves=data.get('affected_tech_cves'),
-            exploitation_status=data.get('exploitation_status'),
-            scope_impact=data.get('scope_impact'),
-            countries_industries=data.get('countries_industries'),
-            mitre_ttps=data.get('mitre_ttps'),
-            recommended_action=data.get('recommended_action'),
-            stock_info=stock_info,
-            link=article['link'],
-            logscale_queries=logscale_joined,
-            splunk_queries=splunk_joined
-        )
+        logscale_joined = "\n\n".join(data.get('logscale_queries', []))
+        splunk_joined = "\n\n".join(data.get('splunk_queries', []))
+        
+        # Build report using a clean list of lines to completely bypass parser escapes
+        report_lines = [
+            "======================================================================",
+            f"[{data.get('severity')}] THREAT INTEL BRIEFING: {article['title']}",
+            "======================================================================",
+            f"• Threat Date        : {data.get('threat_date')} (Feed: {article['pub_date']})",
+            f"• Executive Summary  : {data.get('exec_summary')}",
+            f"• Campaign Status    : {data.get('is_new_campaign')}",
+            f"• Threat Actor       : {data.get('threat_group')}",
+            f"• Affected Tech/CVEs : {data.get('affected_tech_cves')}",
+            f"• Exploitation State : {data.get('exploitation_status')}",
+            f"• Scope & Impact     : {data.get('scope_impact')}",
+            f"• Target Sectors     : {data.get('countries_industries')}",
+            f"• MITRE ATT&CK       : {data.get('mitre_ttps')}",
+            f"• Recommended Action : {data.get('recommended_action')}",
+            f"• Affected Stock     : {stock_info}",
+            f"• Source URL         : {article['link']}",
+            "",
+            "--- LOGSCALE QUERIES ---",
+            logscale_joined,
+            "",
+            "--- SPLUNK QUERIES ---",
+            splunk_joined,
+            "======================================================================"
+        ]
+        report_text = "\n".join(report_lines)
         reports.append(report_text)
     except Exception as e:
         print(f"Error processing {article['link']}: {e}")
 
+# This aligns back outside the 'for article in new_articles:' loop
 with open(SEEN_FILE, "w") as f:
     json.dump({"seen": list(seen_urls)[-1000:]}, f)
 
