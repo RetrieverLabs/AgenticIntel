@@ -178,7 +178,6 @@ for i, article in enumerate(new_articles, 1):
 
     try:
         print(f"    -> Querying Gemini (gemini-3.8-flash)...")
-        time.sleep(3)  # Respectful baseline spacing between calls
 
         # Enhanced 429 & 503 Exponential Backoff Retry Loop
         response = None
@@ -243,8 +242,11 @@ for i, article in enumerate(new_articles, 1):
     except Exception as e:
         print(f"    [!] Error processing {article['link']}: {e}")
 
-    # Polite randomized pause between iterations
-    time.sleep(random.uniform(2.0, 4.0))
+    # --- BATCH PACING DELAY ---
+    # Pause 8-12 seconds between articles to safely respect per-minute limits
+    pacing_delay = random.uniform(8.0, 12.0)
+    print(f"    [*] Pacing pause: waiting {pacing_delay:.1f}s before next article...")
+    time.sleep(pacing_delay)
 
 with open(SEEN_FILE, "w") as f:
     json.dump({"seen": list(seen_urls)[-1000:]}, f)
