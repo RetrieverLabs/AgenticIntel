@@ -7,7 +7,6 @@ from email.message import EmailMessage
 import feedparser
 import requests
 import trafilatura
-import yfinance as yf
 from google import genai
 from google.genai import types
 from pydantic import BaseModel, Field
@@ -88,7 +87,6 @@ class ThreatAnalysis(BaseModel):
     countries_industries: str = Field(description="Impacted countries and industries")
     mitre_ttps: str = Field(description="Key MITRE ATT&CK IDs and names")
     recommended_action: str = Field(description="Concrete 1-sentence remediation or defensive action for stakeholders")
-    affected_ticker: str = Field(description="Stock ticker symbol if a public company is impacted, otherwise 'N/A'")
     logscale_queries: list[str] = Field(description="LogScale queries tailored to the threat, following the user's exact syntax structures")
     splunk_queries: list[str] = Field(description="Splunk queries tailored to the threat, following the user's exact syntax structures")
 
@@ -179,28 +177,29 @@ for i, article in enumerate(new_articles, 1):
 
     try:
         print(f"    -> Querying Gemini (gemini-3.8-flash)...")
-        response = client.models.generate_content(
-            model='gemini-3.8-flash',
-            contents=prompt,
-            config=types.GenerateContentConfig(
-                response_mime_type="application/json",
-                response_schema=ThreatAnalysis,
-            ),
-        )
+        time.sleep(2)  # Polite spacing between LLM calls
+
+        # Retry loop with exponential backoff for 503 / rate-limit resilience
+        response = None
+        for attempt in range(3):
+            try:
+                response = client.models.generate_content(
+                    model='gemini-3.8-flash',
+                    contents=prompt,
+                    config=types.GenerateContentConfig(
+                        response_mime_type="application/json",
+                        response_schema=ThreatAnalysis,
+                    ),
+                )
+                break
+            except Exception as api_err:
+                if attempt == 2:
+                    raise api_err
+                print(f"    [!] Gemini busy or 503 received. Retrying in {2 ** (attempt + 1)}s...")
+                time.sleep(2 ** (attempt + 1))
+
         data = json.loads(response.text)
         print(f"    -> Analysis generated successfully. Severity: {data.get('severity')}")
-        
-        stock_info = "N/A"
-        ticker = data.get("affected_ticker", "N/A").strip().upper()
-        if ticker and ticker != "N/A" and len(ticker) <= 5:
-            try:
-                stock = yf.Ticker(ticker)
-                hist = stock.history(period="1d")
-                if not hist.empty:
-                    current_price = hist['Close'].iloc[-1]
-                    stock_info = f"{ticker}: ${current_price:.2f} USD"
-            except Exception:
-                stock_info = f"{ticker}: Lookup failed"
 
         logscale_joined = "\n\n".join(data.get('logscale_queries', []))
         splunk_joined = "\n\n".join(data.get('splunk_queries', []))
@@ -219,7 +218,6 @@ for i, article in enumerate(new_articles, 1):
             "• Target Sectors     : " + str(data.get('countries_industries', '')) + "\n" +
             "• MITRE ATT&CK       : " + str(data.get('mitre_ttps', '')) + "\n" +
             "• Recommended Action : " + str(data.get('recommended_action', '')) + "\n" +
-            "• Affected Stock     : " + str(stock_info) + "\n" +
             "• Source URL         : " + str(article.get('link', '')) + "\n\n" +
             "--- LOGSCALE QUERIES ---\n" +
             logscale_joined + "\n\n" +
