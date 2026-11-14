@@ -1,0 +1,42 @@
+name: Automated Threat Intel Pipeline
+
+on:
+  schedule:
+    - cron: '0 */4 * * *' # Runs every 4 hours
+  workflow_dispatch: # Allows manual trigger from GitHub Actions tab
+
+jobs:
+  run-pipeline:
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write # Required to commit updated seen_urls.json back to repo
+
+    steps:
+      - name: Checkout Repository
+        uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+
+      - name: Install Dependencies
+        run: |
+          python -m pip install --upgrade pip
+          pip install feedparser trafilatura yfinance google-genai pydantic
+
+      - name: Run Threat Intel Pipeline
+        env:
+          GEMINI_API_KEY: ${{ secrets.GEMINI_API_KEY }}
+          GMAIL_USER: ${{ secrets.GMAIL_USER }}
+          GMAIL_APP_PASSWORD: ${{ secrets.GMAIL_APP_PASSWORD }}
+          GMAIL_RECIPIENT: ${{ secrets.GMAIL_RECIPIENT }}
+        run: |
+          python intel_pipeline.py
+
+      - name: Commit Updated Seen URLs
+        run: |
+          git config --global user.name "github-actions[bot]"
+          git config --global user.email "github-actions[bot]@users.noreply.github.io"
+          git add seen_urls.json
+          git diff --quiet && git diff --staged --quiet || (git commit -m "chore: update seen threat intel URLs [skip ci]" && git push)
