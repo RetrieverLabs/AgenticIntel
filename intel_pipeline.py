@@ -35,10 +35,10 @@ else:
 
 seen_urls = set(seen_data["seen"])
 
-# Deterministic pre-filter keywords to save LLM tokens/rate limits
+# Stricter pre-filter keywords focused on critical severity and severe exploitation
 KEYWORDS = [
-    "ransomware", "malware", "phishing", "vishing", "zero-day", "0-day",
-    "supply chain", "cve-", "backdoor", "breach", "exploit", "npm", "pypi"
+    "critical", "cvss 9", "cvss 10", "rce", "remote code execution",
+    "zero-day", "0-day", "actively exploited", "ransomware", "supply chain"
 ]
 
 new_articles = []
@@ -49,7 +49,8 @@ for feed_url in FEEDS:
     parsed_feed = feedparser.parse(feed_url)
     print(f"    -> Found {len(parsed_feed.entries)} total entries in feed.")
     
-    for entry in parsed_feed.entries[:10]:
+    # Sliced to top 3 for speed and noise reduction
+    for entry in parsed_feed.entries[:3]:
         link = getattr(entry, "link", "")
         title = getattr(entry, "title", "")
         pub_date = getattr(entry, "published", getattr(entry, "updated", "Unknown Date"))
@@ -66,10 +67,10 @@ for feed_url in FEEDS:
                 "pub_date": pub_date
             })
 
-print(f"\n[*] Total new unique articles matching keywords: {len(new_articles)}")
+print(f"\n[*] Total new unique articles matching critical criteria: {len(new_articles)}")
 
 if not new_articles:
-    print("No new threat intel articles matching criteria. Exiting.")
+    print("No new high-severity threat intel articles matching criteria. Exiting.")
     exit(0)
 
 # Initialize Gemini Client
@@ -199,14 +200,20 @@ for i, article in enumerate(new_articles, 1):
                 time.sleep(2 ** (attempt + 1))
 
         data = json.loads(response.text)
-        print(f"    -> Analysis generated successfully. Severity: {data.get('severity')}")
+        severity = data.get('severity', '').strip().upper()
+        print(f"    -> Analysis generated successfully. Severity: {severity}")
+
+        # Gatekeeper: Discard anything below HIGH or CRITICAL to eliminate noise
+        if severity not in ["CRITICAL", "HIGH"]:
+            print(f"    -> Skipping briefing: Severity '{severity}' is below threshold (High/Critical only).")
+            continue
 
         logscale_joined = "\n\n".join(data.get('logscale_queries', []))
         splunk_joined = "\n\n".join(data.get('splunk_queries', []))
 
         report_text = (
             "======================================================================\n" +
-            "[" + str(data.get('severity', 'UNKNOWN')) + "] THREAT INTEL BRIEFING: " + str(article.get('title', '')) + "\n" +
+            "[" + severity + "] THREAT INTEL BRIEFING: " + str(article.get('title', '')) + "\n" +
             "======================================================================\n" +
             "• Threat Date        : " + str(data.get('threat_date', '')) + " (Feed: " + str(article.get('pub_date', '')) + ")\n" +
             "• Executive Summary  : " + str(data.get('exec_summary', '')) + "\n" +
@@ -226,7 +233,7 @@ for i, article in enumerate(new_articles, 1):
             "======================================================================"
         )
         reports.append(report_text)
-        print(f"    -> Added report to digest queue.")
+        print(f"    -> Added high-priority report to digest queue.")
         
     except Exception as e:
         print(f"    [!] Error processing {article['link']}: {e}")
@@ -238,9 +245,9 @@ with open(SEEN_FILE, "w") as f:
     json.dump({"seen": list(seen_urls)[-1000:]}, f)
 
 if reports:
-    print(f"\n[*] Preparing email digest containing {len(reports)} report(s)...")
+    print(f"\n[*] Preparing email digest containing {len(reports)} high-severity report(s)...")
     msg = EmailMessage()
-    msg['Subject'] = f"[Threat Intel Digest] {len(reports)} New Briefing(s) - {new_articles[0]['pub_date'][:16]}"
+    msg['Subject'] = f"[Threat Intel Digest] {len(reports)} High/Critical Briefing(s) - {new_articles[0]['pub_date'][:16]}"
     msg['From'] = os.environ["GMAIL_USER"]
     msg['To'] = os.environ["GMAIL_RECIPIENT"]
     msg.set_content("\n".join(reports))
@@ -250,4 +257,4 @@ if reports:
         smtp.send_message(msg)
     print("[*] Threat intel digest emailed successfully.")
 else:
-    print("\n[*] No reports successfully generated. Skipping email.")
+    print("\n[*] No High/Critical reports generated. Skipping email.")
