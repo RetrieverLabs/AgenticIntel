@@ -189,7 +189,7 @@ for i, article in enumerate(new_articles, 1):
         for attempt in range(4):
             try:
                 response_obj = client.chat.completions.create(
-                    model="llama-3.3-70b-versatile",
+                    model="openai/gpt-oss-120b",  # <--- Updated active model ID
                     messages=[
                         {"role": "system", "content": system_prompt + f"\n\nReturn ONLY valid JSON matching this schema: {ThreatAnalysis.model_json_schema()}"},
                         {"role": "user", "content": user_prompt}
