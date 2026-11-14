@@ -148,8 +148,8 @@ class ThreatAnalysis(BaseModel):
     countries_industries: str = Field(description="Impacted sectors (Canada, US, UK financial focus)")
     mitre_ttps: str = Field(description="Key MITRE ATT&CK IDs and names")
     recommended_action: str = Field(description="Concrete remediation action")
-    logscale_queries: list[str] = Field(description="LogScale queries covering Endpoint, Web, and Network Traffic telemetry")
-    splunk_queries: list[str] = Field(description="Splunk queries covering Endpoint, Web.Web, and Network_Traffic.All_Traffic datamodels")
+    logscale_queries: list[str] = Field(description="LogScale queries strictly matching the required syntax structures for LogScale")
+    splunk_queries: list[str] = Field(description="Splunk queries strictly utilizing tstats datamodels for Endpoint, Web.Web, and Network_Traffic.All_Traffic")
 
 reports = []
 
@@ -170,15 +170,39 @@ for i, item in enumerate(new_articles, 1):
         if not article_text:
             article_text = item["title"]
 
+    logscale_ioc_template = (
+        "case {\n"
+        "  in(RemoteAddressIP4, values=[\"203.0.113.45\"]) | ioc_match := \"Malicious IP\" | ioc_value := RemoteAddressIP4;\n"
+        "  in(DomainName, values=[\"example.com\"]) | ioc_match := \"Malicious Domain\" | ioc_value := DomainName;\n"
+        "  in(SHA256HashData, values=[\"e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855\"]) | ioc_match := \"Malicious Hash\" | ioc_value := SHA256HashData;\n"
+        "  * | dropEvent()\n"
+        "}\n"
+        "| table([@timestamp, ComputerName, ioc_match, ioc_value])"
+    )
+
+    splunk_dm_template = (
+        "| tstats count \n"
+        "    from datamodel=Endpoint.Processes \n"
+        "    where Processes.process_name IN (\"process.exe\") \n"
+        "    by Processes.dest, Processes.user, Processes.process_name, Processes.process, _time\n"
+        "| rename Processes.* as *\n"
+        "| sort - _time"
+    )
+
     system_prompt = (
-        "You are an expert cyber security threat intelligence analyst and threat hunter for Agentic Finance. "
-        "Analyze the provided threat data and return valid JSON matching the required schema. "
-        "Ensure production-ready SIEM queries cover CrowdStrike LogScale and Splunk across Endpoint, Web (Web.Web), and Network Traffic (Network_Traffic.All_Traffic) data models."
+        "You are an expert cyber security threat intelligence analyst and threat hunter for a Canadian financial institution (ACME Finance). "
+        "Analyze the provided article and return valid JSON matching the required schema. "
+        "STRICT QUERY ENFORCEMENT: You MUST output syntactically valid CrowdStrike LogScale queries and Splunk queries. "
+        "For Splunk, you MUST use '| tstats count from datamodel=Endpoint.Processes', '| tstats count from datamodel=Web.Web', and '| tstats count from datamodel=Network_Traffic.All_Traffic'. "
+        "Do NOT hallucinate fake indexes or custom sourcetypes. Discard or rate as 'LOW' severity any ICS/OT/manufacturing advisories."
     )
 
     user_prompt = (
         f"Analyze this threat intelligence item for SOC threat hunters.\n"
-        f"Title: {item['title']}\nSource URL/Feed: {item['link']}\n"
+        f"Title: {item['title']}\nSource URL/Feed: {item['link']}\n\n"
+        f"You must provide queries adhering to these templates:\n"
+        f"=== LOGSCALE TEMPLATE ===\n{logscale_ioc_template}\n\n"
+        f"=== SPLUNK DATAMODEL TEMPLATE ===\n{splunk_dm_template}\n\n"
         f"Content/IOCs:\n{article_text[:4500]}"
     )
 
@@ -229,29 +253,48 @@ for i, item in enumerate(new_articles, 1):
 with open(SEEN_FILE, "w") as f:
     json.dump({"seen": list(seen_urls)[-1000:]}, f)
 
-# --- 3. Generate Simple PDF Report for Attachment ---
+# --- 3. Generate Styled, Professional PDF Report for Attachment ---
 try:
     from reportlab.lib.pagesizes import letter
-    from reportlab.platypus import SimpleDocTemplate, Paragraph, Spacer
+    from reportlab.platypus import SimpleDocTemplate, Paragraph, Spacer, Table, TableStyle, HRFlowable
     from reportlab.lib.styles import getSampleStyleSheet, ParagraphStyle
+    from reportlab.lib import colors
 
-    doc = SimpleDocTemplate(PDF_FILENAME, pagesize=letter, rightMargin=36, leftMargin=36, topMargin=36, bottomMargin=36)
+    doc = SimpleDocTemplate(PDF_FILENAME, pagesize=letter, rightMargin=30, leftMargin=30, topMargin=30, bottomMargin=30)
     styles = getSampleStyleSheet()
+    
+    title_style = ParagraphStyle(
+        'DocTitle',
+        parent=styles['Heading1'],
+        fontSize=18,
+        leading=22,
+        textColor=colors.HexColor("#1A365D"),
+        spaceAfter=4
+    )
+    
+    body_style = ParagraphStyle(
+        'BodyTextCustom',
+        parent=styles['Normal'],
+        fontSize=8.5,
+        leading=12,
+        textColor=colors.HexColor("#2D3748")
+    )
+
     story = [
-        Paragraph("<b>Agentic Threat Intelligence Digest</b>", styles['Heading1']),
-        Spacer(1, 10),
-        Paragraph(f"Automated threat brief generated for ACME Finance (Canada/US/UK). Total actionable briefings: {len(reports)}", styles['Normal']),
-        Spacer(1, 15)
+        Paragraph("<b>Agentic Threat Intelligence Digest</b>", title_style),
+        Paragraph(f"<b>Target Scope:</b> Canadian Financial Institution (ACME Finance) & Subsidiaries | <b>Actionable Briefings:</b> {len(reports)}", body_style),
+        Spacer(1, 8),
+        HRFlowable(width="100%", thickness=1.5, color=colors.HexColor("#1A365D"), spaceAfter=12)
     ]
     
     for r in reports:
-        story.append(Paragraph(r.replace('\n', '<br/>'), styles['Code']))
-        story.append(Spacer(1, 15))
+        story.append(Paragraph(r.replace('\n', '<br/>'), body_style))
+        story.append(Spacer(1, 10))
         
     doc.build(story)
-    print(f"[*] Successfully generated {PDF_FILENAME}")
+    print(f"[*] Successfully generated styled PDF report: {PDF_FILENAME}")
 except Exception as pdf_err:
-    print(f"    [!] PDF generation note: {pdf_err}")
+    print(f"    [!] PDF generation error: {pdf_err}")
 
 # --- 4. Construct and Send Email with PDF Attachment ---
 if fyi_table_rows or reports:
@@ -275,7 +318,6 @@ if fyi_table_rows or reports:
     msg['To'] = os.environ["GMAIL_RECIPIENT"]
     msg.set_content("\n".join(email_body_parts))
 
-    # Attach PDF report if it exists
     if os.path.exists(PDF_FILENAME):
         with open(PDF_FILENAME, "rb") as f:
             pdf_data = f.read()
@@ -285,7 +327,7 @@ if fyi_table_rows or reports:
             subtype="pdf",
             filename=PDF_FILENAME
         )
-        print("[*] Attached PDF report to email.")
+        print("[*] Attached styled PDF report to email.")
 
     with smtplib.SMTP_SSL("smtp.gmail.com", 465) as smtp:
         smtp.login(os.environ["GMAIL_USER"], os.environ["GMAIL_APP_PASSWORD"])
