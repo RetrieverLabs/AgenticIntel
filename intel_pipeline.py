@@ -34,8 +34,12 @@ KEYWORDS = [
 
 new_articles = []
 
+print("[*] Starting RSS feed parsing and keyword pre-filtering...")
 for feed_url in FEEDS:
+    print(f"[*] Parsing feed: {feed_url}")
     parsed_feed = feedparser.parse(feed_url)
+    print(f"    -> Found {len(parsed_feed.entries)} total entries in feed.")
+    
     for entry in parsed_feed.entries[:10]:
         link = getattr(entry, "link", "")
         title = getattr(entry, "title", "")
@@ -46,14 +50,17 @@ for feed_url in FEEDS:
         
         text_blob = f"{title} {getattr(entry, 'summary', '')}".lower()
         if any(kw in text_blob for kw in KEYWORDS):
+            print(f"    [+] Match found: {title[:60]}...")
             new_articles.append({
                 "title": title,
                 "link": link,
                 "pub_date": pub_date
             })
 
+print(f"\n[*] Total new unique articles matching keywords: {len(new_articles)}")
+
 if not new_articles:
-    print("No new threat intel articles matching criteria.")
+    print("No new threat intel articles matching criteria. Exiting.")
     exit(0)
 
 # Initialize Gemini Client
@@ -77,15 +84,15 @@ class ThreatAnalysis(BaseModel):
 
 reports = []
 
-for article in new_articles:
+for i, article in enumerate(new_articles, 1):
     seen_urls.add(article["link"])
+    print(f"\n[*] Processing [{i}/{len(new_articles)}]: {article['title']}")
     
     downloaded = trafilatura.fetch_url(article["link"])
     article_text = trafilatura.extract(downloaded) if downloaded else article["title"]
     if not article_text:
         article_text = article["title"]
 
-    # Define query templates cleanly as standard strings to avoid all backslash/brace parsing issues
     logscale_ioc_template = (
         "case {\n"
         "  in(RemoteAddressIP4, values=[\"203.0.113.45\", \"198.51.100.12\"]) | ioc_match := \"Malicious IP\" | ioc_value := RemoteAddressIP4;\n"
@@ -145,6 +152,7 @@ for article in new_articles:
     )
 
     try:
+        print(f"    -> Querying Gemini (gemini-3.8-flash)...")
         response = client.models.generate_content(
             model='gemini-3.8-flash',
             contents=prompt,
@@ -154,6 +162,7 @@ for article in new_articles:
             ),
         )
         data = json.loads(response.text)
+        print(f"    -> Analysis generated successfully. Severity: {data.get('severity')}")
         
         stock_info = "N/A"
         ticker = data.get("affected_ticker", "N/A").strip().upper()
@@ -170,7 +179,6 @@ for article in new_articles:
         logscale_joined = "\n\n".join(data.get('logscale_queries', []))
         splunk_joined = "\n\n".join(data.get('splunk_queries', []))
 
-        # Pure string concatenation - zero f-strings, zero parser traps
         report_text = (
             "======================================================================\n" +
             "[" + str(data.get('severity', 'UNKNOWN')) + "] THREAT INTEL BRIEFING: " + str(article.get('title', '')) + "\n" +
@@ -194,14 +202,16 @@ for article in new_articles:
             "======================================================================"
         )
         reports.append(report_text)
+        print(f"    -> Added report to digest queue.")
+        
     except Exception as e:
-        print(f"Error processing {article['link']}: {e}")
+        print(f"    [!] Error processing {article['link']}: {e}")
 
-# This aligns back outside the 'for article in new_articles:' loop
 with open(SEEN_FILE, "w") as f:
     json.dump({"seen": list(seen_urls)[-1000:]}, f)
 
 if reports:
+    print(f"\n[*] Preparing email digest containing {len(reports)} report(s)...")
     msg = EmailMessage()
     msg['Subject'] = f"[Threat Intel Digest] {len(reports)} New Briefing(s) - {new_articles[0]['pub_date'][:16]}"
     msg['From'] = os.environ["GMAIL_USER"]
@@ -211,4 +221,6 @@ if reports:
     with smtplib.SMTP_SSL("smtp.gmail.com", 465) as smtp:
         smtp.login(os.environ["GMAIL_USER"], os.environ["GMAIL_APP_PASSWORD"])
         smtp.send_message(msg)
-    print("Threat intel digest emailed successfully.")
+    print("[*] Threat intel digest emailed successfully.")
+else:
+    print("\n[*] No reports successfully generated. Skipping email.")
