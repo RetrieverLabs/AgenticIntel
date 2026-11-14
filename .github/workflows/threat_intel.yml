@@ -21,6 +21,6 @@ jobs:
         with:
           python-version: '3.11'
       - name: Install dependencies
-        run: pip install feedparser requests trafilatura groq pydantic
+        run: pip install groq feedparser requests trafilatura pydantic reportlab
       - name: Run pipeline
         run: python intel_pipeline.py
