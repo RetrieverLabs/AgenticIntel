@@ -1,8 +1,11 @@
 import os
 import json
+import time
+import random
 import smtplib
 from email.message import EmailMessage
 import feedparser
+import requests
 import trafilatura
 import yfinance as yf
 from google import genai
@@ -16,6 +19,13 @@ FEEDS = [
     "https://feeds.feedburner.com/TheHackersNews",
 ]
 SEEN_FILE = "seen_urls.json"
+
+# Realistic browser user-agents to bypass anti-bot scrapers
+USER_AGENTS = [
+    "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/122.0.0.0 Safari/537.36",
+    "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/605.1.15 (KHTML, like Gecko) Version/17.4.1 Safari/605.1.15",
+    "Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/121.0.0.0 Safari/537.36"
+]
 
 # Load deduplication state
 if os.path.exists(SEEN_FILE):
@@ -88,7 +98,23 @@ for i, article in enumerate(new_articles, 1):
     seen_urls.add(article["link"])
     print(f"\n[*] Processing [{i}/{len(new_articles)}]: {article['title']}")
     
-    downloaded = trafilatura.fetch_url(article["link"])
+    # Human-like browser headers & anti-bot evasion
+    headers = {
+        "User-Agent": random.choice(USER_AGENTS),
+        "Accept": "text/html,application/xhtml+xml,application/xml;q=0.9,image/webp,*/*;q=0.8",
+        "Accept-Language": "en-US,en;q=0.5",
+        "DNT": "1",
+        "Connection": "keep-alive",
+        "Upgrade-Insecure-Requests": "1"
+    }
+    
+    try:
+        response = requests.get(article["link"], headers=headers, timeout=10)
+        downloaded = response.text if response.status_code == 200 else None
+    except Exception as e:
+        print(f"    [!] Request warning for {article['link']}: {e}")
+        downloaded = None
+
     article_text = trafilatura.extract(downloaded) if downloaded else article["title"]
     if not article_text:
         article_text = article["title"]
@@ -206,6 +232,9 @@ for i, article in enumerate(new_articles, 1):
         
     except Exception as e:
         print(f"    [!] Error processing {article['link']}: {e}")
+
+    # Polite randomized pause to prevent hammering servers
+    time.sleep(random.uniform(1.0, 2.5))
 
 with open(SEEN_FILE, "w") as f:
     json.dump({"seen": list(seen_urls)[-1000:]}, f)
