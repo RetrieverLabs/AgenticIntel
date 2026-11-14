@@ -85,7 +85,7 @@ for article in new_articles:
     if not article_text:
         article_text = article["title"]
 
-    # Using standard .format() instead of an f-string to prevent brace/backslash syntax collisions
+# Using standard string concatenation (+), avoiding all f-string and .format() brace conflicts
     prompt = """
     Analyze the following cyber security threat intelligence article for executive stakeholders and SOC threat hunters.
     Extract key IOCs or behavioral TTPs, and populate all executive briefing fields accurately.
@@ -93,12 +93,12 @@ for article in new_articles:
     You must construct production-ready queries for CrowdStrike LogScale and Splunk modeled exactly after these user-provided templates:
 
     === LOGSCALE IOC TEMPLATE EXAMPLE ===
-    case {{
+    case {
       in(RemoteAddressIP4, values=["203.0.113.45", "198.51.100.12"]) | ioc_match := "Malicious IP" | ioc_value := RemoteAddressIP4;
       in(DomainName, values=["example.com", "c2-server.net"]) | ioc_match := "Malicious Domain" | ioc_value := DomainName;
       in(SHA256HashData, values=["e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"]) | ioc_match := "Malicious Hash" | ioc_value := SHA256HashData;
       * | dropEvent()
-    }}
+    }
     | table([@timestamp, ComputerName, ioc_match, ioc_value])
 
     === LOGSCALE BEHAVIORAL TEMPLATE EXAMPLE ===
@@ -123,7 +123,6 @@ for article in new_articles:
     index IN (*akamai*, *bluecoat*, *osnix*, *web*, *proxy*, *linux*, *pan*, *firewall*) (
         "103.216.220.92" OR "31.223.184.166" OR "0c5486f06620e26e316f4b33f318b0d646d5e1133789331aa2fed012360d1486"
     ) 
-    | rex field=_raw "(?i)(?:client[_-]?ip|src[_-]?ip|src)[=:\s]+(?<src_ip>\d{1,3}\.\d{1,3}\.\d{1,3}\.\d{1,3})"
     | eval Matched_Category = case(
         like(_raw, "%php2shell%"), "Suspicious Scanner / Boundary Match",
         1=1, "Known Threat Actor IP / General IOC Match"
@@ -132,17 +131,11 @@ for article in new_articles:
     | table _time, index, host, src_ip, Matched_Category, _raw
 
     --- NOW PROCESS THIS ARTICLE ---
-    Article Title: {title}
-    Feed Published Date: {pub_date}
-    URL: {link}
+    Article Title: """ + article['title'] + """
+    Feed Published Date: """ + article['pub_date'] + """
+    URL: """ + article['link'] + """
     Content:
-    {content}
-    """.format(
-        title=article['title'],
-        pub_date=article['pub_date'],
-        link=article['link'],
-        content=article_text[:4500]
-    )
+    """ + article_text[:4500]
 
     try:
         response = client.models.generate_content(
