@@ -167,30 +167,48 @@ for article in new_articles:
             except Exception:
                 stock_info = f"{ticker}: Lookup failed"
 
-        report_text = f"""
+        report_text = """
 ======================================================================
-[{data.get('severity')}] THREAT INTEL BRIEFING: {article['title']}
+[{severity}] THREAT INTEL BRIEFING: {title}
 ======================================================================
-• Threat Date        : {data.get('threat_date')} (Feed: {article['pub_date']})
-• Executive Summary  : {data.get('exec_summary')}
-• Campaign Status    : {data.get('is_new_campaign')}
-• Threat Actor       : {data.get('threat_group')}
-• Affected Tech/CVEs : {data.get('affected_tech_cves')}
-• Exploitation State : {data.get('exploitation_status')}
-• Scope & Impact     : {data.get('scope_impact')}
-• Target Sectors     : {data.get('countries_industries')}
-• MITRE ATT&CK       : {data.get('mitre_ttps')}
-• Recommended Action : {data.get('recommended_action')}
+• Threat Date        : {threat_date} (Feed: {pub_date})
+• Executive Summary  : {exec_summary}
+• Campaign Status    : {is_new_campaign}
+• Threat Actor       : {threat_group}
+• Affected Tech/CVEs : {affected_tech_cves}
+• Exploitation State : {exploitation_status}
+• Scope & Impact     : {scope_impact}
+• Target Sectors     : {countries_industries}
+• MITRE ATT&CK       : {mitre_ttps}
+• Recommended Action : {recommended_action}
 • Affected Stock     : {stock_info}
-• Source URL         : {article['link']}
+• Source URL         : {link}
 
 --- LOGSCALE QUERIES ---
-{'\n\n'.join(data.get('logscale_queries', []))}
+{logscale_queries}
 
 --- SPLUNK QUERIES ---
-{'\n\n'.join(data.get('splunk_queries', []))}
+{splunk_queries}
 ======================================================================
-"""
+""".format(
+            severity=data.get('severity'),
+            title=article['title'],
+            threat_date=data.get('threat_date'),
+            pub_date=article['pub_date'],
+            exec_summary=data.get('exec_summary'),
+            is_new_campaign=data.get('is_new_campaign'),
+            threat_group=data.get('threat_group'),
+            affected_tech_cves=data.get('affected_tech_cves'),
+            exploitation_status=data.get('exploitation_status'),
+            scope_impact=data.get('scope_impact'),
+            countries_industries=data.get('countries_industries'),
+            mitre_ttps=data.get('mitre_ttps'),
+            recommended_action=data.get('recommended_action'),
+            stock_info=stock_info,
+            link=article['link'],
+            logscale_queries=logscale_joined,
+            splunk_queries=splunk_joined
+        )
         reports.append(report_text)
     except Exception as e:
         print(f"Error processing {article['link']}: {e}")
