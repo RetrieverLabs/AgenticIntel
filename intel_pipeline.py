@@ -253,10 +253,10 @@ for i, item in enumerate(new_articles, 1):
 with open(SEEN_FILE, "w") as f:
     json.dump({"seen": list(seen_urls)[-1000:]}, f)
 
-# --- 3. Generate Styled, Professional PDF Report for Attachment ---
+# --- 3. Generate Styled, Professional PDF Report (Using Preformatted) ---
 try:
     from reportlab.lib.pagesizes import letter
-    from reportlab.platypus import SimpleDocTemplate, Paragraph, Spacer, Table, TableStyle, HRFlowable
+    from reportlab.platypus import SimpleDocTemplate, Paragraph, Spacer, HRFlowable, Preformatted
     from reportlab.lib.styles import getSampleStyleSheet, ParagraphStyle
     from reportlab.lib import colors
 
@@ -279,6 +279,15 @@ try:
         leading=12,
         textColor=colors.HexColor("#2D3748")
     )
+    
+    report_code_style = ParagraphStyle(
+        'ReportCodeBlock',
+        parent=styles['Normal'],
+        fontName='Courier',
+        fontSize=7.5,
+        leading=10,
+        textColor=colors.HexColor("#1A202C")
+    )
 
     story = [
         Paragraph("<b>Agentic Threat Intelligence Digest</b>", title_style),
@@ -288,8 +297,8 @@ try:
     ]
     
     for r in reports:
-        story.append(Paragraph(r.replace('\n', '<br/>'), body_style))
-        story.append(Spacer(1, 10))
+        story.append(Preformatted(r, report_code_style))
+        story.append(Spacer(1, 12))
         
     doc.build(story)
     print(f"[*] Successfully generated styled PDF report: {PDF_FILENAME}")
