@@ -73,7 +73,7 @@ class ThreatAnalysis(BaseModel):
     recommended_action: str = Field(description="Concrete 1-sentence remediation or defensive action for stakeholders")
     affected_ticker: str = Field(description="Stock ticker symbol if a public company is impacted, otherwise 'N/A'")
     logscale_queries: list[str] = Field(description="LogScale queries tailored to the threat, following the user's exact syntax structures")
-    splunk_queries: list[str] = Field(description="Splunk queries tailored to the threat, following the user's exact syntax structures (including Datamodel and Index Fallback patterns)")
+    splunk_queries: list[str] = Field(description="Splunk queries tailored to the threat, following the user's exact syntax structures")
 
 reports = []
 
@@ -85,7 +85,8 @@ for article in new_articles:
     if not article_text:
         article_text = article["title"]
 
-    prompt = f"""
+    # Using standard .format() instead of an f-string to prevent brace/backslash syntax collisions
+    prompt = """
     Analyze the following cyber security threat intelligence article for executive stakeholders and SOC threat hunters.
     Extract key IOCs or behavioral TTPs, and populate all executive briefing fields accurately.
 
@@ -120,25 +121,28 @@ for article in new_articles:
 
     === SPLUNK INDEX FALLBACK TEMPLATE EXAMPLE ===
     index IN (*akamai*, *bluecoat*, *osnix*, *web*, *proxy*, *linux*, *pan*, *firewall*) (
-        -- Threat Actor IPs / IOCs
         "103.216.220.92" OR "31.223.184.166" OR "0c5486f06620e26e316f4b33f318b0d646d5e1133789331aa2fed012360d1486"
     ) 
     | rex field=_raw "(?i)(?:client[_-]?ip|src[_-]?ip|src)[=:\s]+(?<src_ip>\d{1,3}\.\d{1,3}\.\d{1,3}\.\d{1,3})"
-    | rex field=_raw "(?i)(?:dest[_-]?ip|dst[_-]?ip|dst)[=:\s]+(?<dest_ip>\d{1,3}\.\d{1,3}\.\d{1,3}\.\d{1,3})"
     | eval Matched_Category = case(
         like(_raw, "%php2shell%"), "Suspicious Scanner / Boundary Match",
         1=1, "Known Threat Actor IP / General IOC Match"
     )
     | fillnull value=-
-    | table _time, index, host, src_ip, dest_ip, Matched_Category, _raw
+    | table _time, index, host, src_ip, Matched_Category, _raw
 
     --- NOW PROCESS THIS ARTICLE ---
-    Article Title: {article['title']}
-    Feed Published Date: {article['pub_date']}
-    URL: {article['link']}
+    Article Title: {title}
+    Feed Published Date: {pub_date}
+    URL: {link}
     Content:
-    {article_text[:4500]}
-    """
+    {content}
+    """.format(
+        title=article['title'],
+        pub_date=article['pub_date'],
+        link=article['link'],
+        content=article_text[:4500]
+    )
 
     try:
         response = client.models.generate_content(
