@@ -178,11 +178,11 @@ for i, article in enumerate(new_articles, 1):
 
     try:
         print(f"    -> Querying Gemini (gemini-3.8-flash)...")
-        time.sleep(2)  # Polite spacing between LLM calls
+        time.sleep(3)  # Respectful baseline spacing between calls
 
-        # Retry loop with exponential backoff for 503 / rate-limit resilience
+        # Enhanced 429 & 503 Exponential Backoff Retry Loop
         response = None
-        for attempt in range(3):
+        for attempt in range(4):
             try:
                 response = client.models.generate_content(
                     model='gemini-3.8-flash',
@@ -194,10 +194,15 @@ for i, article in enumerate(new_articles, 1):
                 )
                 break
             except Exception as api_err:
-                if attempt == 2:
+                err_str = str(api_err)
+                if "429" in err_str or "503" in err_str or "Resource exhausted" in err_str:
+                    if attempt == 3:
+                        raise api_err
+                    wait_time = 5 * (2 ** attempt)  # 5s, 10s, 20s backoff
+                    print(f"    [!] Rate limited or busy (429/503). Retrying in {wait_time}s...")
+                    time.sleep(wait_time)
+                else:
                     raise api_err
-                print(f"    [!] Gemini busy or 503 received. Retrying in {2 ** (attempt + 1)}s...")
-                time.sleep(2 ** (attempt + 1))
 
         data = json.loads(response.text)
         severity = data.get('severity', '').strip().upper()
@@ -238,8 +243,8 @@ for i, article in enumerate(new_articles, 1):
     except Exception as e:
         print(f"    [!] Error processing {article['link']}: {e}")
 
-    # Polite randomized pause to prevent hammering servers
-    time.sleep(random.uniform(1.0, 2.5))
+    # Polite randomized pause between iterations
+    time.sleep(random.uniform(2.0, 4.0))
 
 with open(SEEN_FILE, "w") as f:
     json.dump({"seen": list(seen_urls)[-1000:]}, f)
