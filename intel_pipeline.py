@@ -197,7 +197,7 @@ for i, article in enumerate(new_articles, 1):
                 if "429" in err_str or "503" in err_str or "Resource exhausted" in err_str:
                     if attempt == 3:
                         raise api_err
-                    wait_time = 5 * (2 ** attempt)  # 5s, 10s, 20s backoff
+                    wait_time = 10 * (2 ** attempt)  # 10s, 20s, 40s backoff
                     print(f"    [!] Rate limited or busy (429/503). Retrying in {wait_time}s...")
                     time.sleep(wait_time)
                 else:
@@ -242,9 +242,8 @@ for i, article in enumerate(new_articles, 1):
     except Exception as e:
         print(f"    [!] Error processing {article['link']}: {e}")
 
-    # --- BATCH PACING DELAY ---
-    # Pause 8-12 seconds between articles to safely respect per-minute limits
-    pacing_delay = random.uniform(8.0, 12.0)
+    # --- BATCH PACING DELAY (15-18s) ---
+    pacing_delay = random.uniform(15.0, 18.0)
     print(f"    [*] Pacing pause: waiting {pacing_delay:.1f}s before next article...")
     time.sleep(pacing_delay)
 
