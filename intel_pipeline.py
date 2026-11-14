@@ -85,66 +85,72 @@ for article in new_articles:
     if not article_text:
         article_text = article["title"]
 
-# Using standard string concatenation (+), avoiding all f-string and .format() brace conflicts
-    prompt = """
-    Analyze the following cyber security threat intelligence article for executive stakeholders and SOC threat hunters.
-    Extract key IOCs or behavioral TTPs, and populate all executive briefing fields accurately.
-
-    You must construct production-ready queries for CrowdStrike LogScale and Splunk modeled exactly after these user-provided templates:
-
-    === LOGSCALE IOC TEMPLATE EXAMPLE ===
-    case {
-      in(RemoteAddressIP4, values=["203.0.113.45", "198.51.100.12"]) | ioc_match := "Malicious IP" | ioc_value := RemoteAddressIP4;
-      in(DomainName, values=["example.com", "c2-server.net"]) | ioc_match := "Malicious Domain" | ioc_value := DomainName;
-      in(SHA256HashData, values=["e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"]) | ioc_match := "Malicious Hash" | ioc_value := SHA256HashData;
-      * | dropEvent()
-    }
-    | table([@timestamp, ComputerName, ioc_match, ioc_value])
-
-    === LOGSCALE BEHAVIORAL TEMPLATE EXAMPLE ===
-    # event_simpleName=ProcessRollup2 
-    (
-      (CommandLine=~"tar " OR CommandLine=~"zip " OR CommandLine=~"gzip ") AND 
-      (CommandLine=~".ssh" OR CommandLine=~".aws" OR CommandLine=~".azure")
+    # Define query templates cleanly as standard strings to avoid all backslash/brace parsing issues
+    logscale_ioc_template = (
+        "case {\n"
+        "  in(RemoteAddressIP4, values=[\"203.0.113.45\", \"198.51.100.12\"]) | ioc_match := \"Malicious IP\" | ioc_value := RemoteAddressIP4;\n"
+        "  in(DomainName, values=[\"example.com\", \"c2-server.net\"]) | ioc_match := \"Malicious Domain\" | ioc_value := DomainName;\n"
+        "  in(SHA256HashData, values=[\"e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855\"]) | ioc_match := \"Malicious Hash\" | ioc_value := SHA256HashData;\n"
+        "  * | dropEvent()\n"
+        "}\n"
+        "| table([@timestamp, ComputerName, ioc_match, ioc_value])"
     )
-    | select([@timestamp, ComputerName, UserName, ImageFileName, CommandLine, ParentCommandLine])
-    | sort([@timestamp], desc=true)
 
-    === SPLUNK DATAMODEL TEMPLATE EXAMPLE ===
-    | tstats count 
-        from datamodel=Endpoint.Processes 
-        where Processes.parent_process_name IN ("sshd", "sshd-session") 
-              Processes.process_name IN ("sh", "ash", "bash", "dash") 
-        by Processes.dest, Processes.user, Processes.parent_process_name, Processes.process_name, Processes.process, _time
-    | rename Processes.* as *
-    | sort - _time
-
-    === SPLUNK INDEX FALLBACK TEMPLATE EXAMPLE ===
-    index IN (*akamai*, *bluecoat*, *osnix*, *web*, *proxy*, *linux*, *pan*, *firewall*) (
-        "103.216.220.92" OR "31.223.184.166" OR "0c5486f06620e26e316f4b33f318b0d646d5e1133789331aa2fed012360d1486"
-    ) 
-    | eval Matched_Category = case(
-        like(_raw, "%php2shell%"), "Suspicious Scanner / Boundary Match",
-        1=1, "Known Threat Actor IP / General IOC Match"
+    logscale_beh_template = (
+        "# event_simpleName=ProcessRollup2 \n"
+        "(\n"
+        "  (CommandLine=~\"tar \" OR CommandLine=~\"zip \" OR CommandLine=~\"gzip \") AND \n"
+        "  (CommandLine=~\".ssh\" OR CommandLine=~\".aws\" OR CommandLine=~\".azure\")\n"
+        ")\n"
+        "| select([@timestamp, ComputerName, UserName, ImageFileName, CommandLine, ParentCommandLine])\n"
+        "| sort([@timestamp], desc=true)"
     )
-    | fillnull value=-
-    | table _time, index, host, src_ip, Matched_Category, _raw
 
-    --- NOW PROCESS THIS ARTICLE ---
-    Article Title: """ + article['title'] + """
-    Feed Published Date: """ + article['pub_date'] + """
-    URL: """ + article['link'] + """
-    Content:
-    """ + article_text[:4500]
+    splunk_dm_template = (
+        "| tstats count \n"
+        "    from datamodel=Endpoint.Processes \n"
+        "    where Processes.parent_process_name IN (\"sshd\", \"sshd-session\") \n"
+        "          Processes.process_name IN (\"sh\", \"ash\", \"bash\", \"dash\") \n"
+        "    by Processes.dest, Processes.user, Processes.parent_process_name, Processes.process_name, Processes.process, _time\n"
+        "| rename Processes.* as *\n"
+        "| sort - _time"
+    )
+
+    splunk_fallback_template = (
+        "index IN (*akamai*, *bluecoat*, *osnix*, *web*, *proxy*, *linux*, *pan*, *firewall*) (\n"
+        "    \"103.216.220.92\" OR \"31.223.184.166\" OR \"0c5486f06620e26e316f4b33f318b0d646d5e1133789331aa2fed012360d1486\"\n"
+        ") \n"
+        "| rex field=_raw \"(?i)(?:client[_-]?ip|src[_-]?ip|src)[=:\\s]+(?<src_ip>\\d{1,3}\\.\\d{1,3}\\.\\d{1,3}\\.\\d{1,3})\"\n"
+        "| eval Matched_Category = case(\n"
+        "    like(_raw, \"%php2shell%\"), \"Suspicious Scanner / Boundary Match\",\n"
+        "    1=1, \"Known Threat Actor IP / General IOC Match\"\n"
+        ")\n"
+        "| fillnull value=-\n"
+        "| table _time, index, host, src_ip, Matched_Category, _raw"
+    )
+
+    prompt = (
+        "Analyze the following cyber security threat intelligence article for executive stakeholders and SOC threat hunters.\n"
+        "Extract key IOCs or behavioral TTPs, and populate all executive briefing fields accurately.\n\n"
+        "You must construct production-ready queries for CrowdStrike LogScale and Splunk modeled exactly after these templates:\n\n"
+        "=== LOGSCALE IOC TEMPLATE ===\n" + logscale_ioc_template + "\n\n"
+        "=== LOGSCALE BEHAVIORAL TEMPLATE ===\n" + logscale_beh_template + "\n\n"
+        "=== SPLUNK DATAMODEL TEMPLATE ===\n" + splunk_dm_template + "\n\n"
+        "=== SPLUNK FALLBACK TEMPLATE ===\n" + splunk_fallback_template + "\n\n"
+        "--- NOW PROCESS THIS ARTICLE ---\n"
+        "Article Title: " + article['title'] + "\n"
+        "Feed Published Date: " + article['pub_date'] + "\n"
+        "URL: " + article['link'] + "\n"
+        "Content:\n" + article_text[:4500]
+    )
 
     try:
         response = client.models.generate_content(
-            model='gemini-3.8-flash',
+            model='gemini-2.5-flash',
             contents=prompt,
             config=types.GenerateContentConfig(
                 response_mime_type="application/json",
                 response_schema=ThreatAnalysis,
-                thinking_level="low"
             ),
         )
         data = json.loads(response.text)
