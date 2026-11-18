@@ -58,12 +58,26 @@ KEYWORDS = [
 ]
 
 def undefang_text(text: str) -> str:
-    """Robust undefanging normalization for threat intel IOCs and text."""
+    """Robust undefanging normalization for threat intel IOCs and text ingestion."""
     if not text:
         return ""
     text = re.sub(r'hxxps?://', lambda m: m.group(0).replace('hxxp', 'http'), text, flags=re.IGNORECASE)
     text = text.replace('[.]', '.').replace('(.)', '.').replace('[dot]', '.').replace('(dot)', '.')
     text = text.replace('[:]', ':')
+    return text
+
+def defang_ioc(text: str) -> str:
+    """Defangs IPs, domains, and URLs for safe email and PDF transmission against EDR scanners."""
+    if not text:
+        return ""
+    # Defang protocols (http/https -> hxxp/hxxps)
+    text = re.sub(r'https?://', lambda m: m.group(0).replace('http', 'hxxp'), text, flags=re.IGNORECASE)
+    # Defang IPv4 addresses
+    text = re.sub(r'\b(\d{1,3})\.(\d{1,3})\.(\d{1,3})\.(\d{1,3})\b', r'\1[.]\2[.]\3[.]\4', text)
+    # Defang domain dots (avoiding common file extensions if standalone or preserving domain structure)
+    text = re.sub(r'\b([a-zA-Z0-9][-a-zA-Z0-9]*\.)+[a-zA-Z]{2,}\b', lambda m: m.group(0).replace('.', '[.]'), text)
+    # Clean up any potential double brackets or artifacts
+    text = text.replace('[[.]', '[.]').replace('.]]', '.]').replace('[.][.]', '[.]')
     return text
 
 def clean_html_tags(text: str) -> str:
@@ -80,7 +94,6 @@ def parse_standard_date(date_str: str) -> str:
         return datetime.now().strftime("%Y-%m-%d")
     date_str = re.sub(r'\s+(EDT|EST|PDT|PST|UTC|GMT|[+-]\d{4})$', '', date_str).strip()
     
-    # Try parsing spelled-out formats like "October 21, 2026"
     try:
         dt = datetime.strptime(date_str, "%B %d, %Y")
         return dt.strftime("%Y-%m-%d")
@@ -133,9 +146,9 @@ def extract_comprehensive_iocs(raw_text: str) -> dict:
     http_traffic = sorted(list(set(re.findall(r'(?:GET|POST|PUT|DELETE)\s+[^\s]+\s+HTTP\/[0-9\.]+', clean_text))))
 
     return {
-        "ips": [i for i in ips if not i.startswith("127.") and not i.startswith("10.")][:20],
-        "domains": domains[:25],
-        "urls": urls[:15],
+        "ips": [defang_ioc(i) for i in ips if not i.startswith("127.") and not i.startswith("10.")][:20],
+        "domains": [defang_ioc(d) for d in domains][:25],
+        "urls": [defang_ioc(u) for u in urls][:15],
         "sha256s": sha256s[:15],
         "md5s": md5s[:15],
         "paths": paths[:15],
@@ -170,7 +183,6 @@ def get_latest_unit42_ioc_feed():
     return None, None, None
 
 def scrape_wiz_incidents():
-    """Scrapes active incidents from https://threats.wiz.io/all-incidents and filters for past 24h."""
     print("[*] Scraping Wiz Threat Incidents...")
     wiz_entries = []
     try:
@@ -178,10 +190,8 @@ def scrape_wiz_incidents():
         resp = requests.get(WIZ_INCIDENTS_URL, headers=headers, timeout=10)
         if resp.status_code == 200:
             html_text = resp.text
-            # Regex pattern to match incident rows containing Title and Publication Date
             matches = re.findall(r'<tr>\s*<td>([^<]+)</td>\s*<td>([^<]+)</td>', html_text)
             if not matches:
-                # Alternative regex parser for table structures
                 matches = re.findall(r'\| ([^|]+) \| ([A-Za-z]+ \d{1,2}, \d{4}) \|', html_text)
                 
             seen_wiz = set()
@@ -203,7 +213,6 @@ def scrape_wiz_incidents():
     return wiz_entries
 
 def scrape_cccs_alerts():
-    """Scrapes latest alerts from CCCS advisories page within past 24 hours."""
     print("[*] Scraping CCCS (Cyber Centre) alerts...")
     cccs_entries = []
     try:
@@ -271,7 +280,6 @@ top_fyi_entries = fyi_entries[:6]
 new_articles = []
 existing_titles = set()
 
-# Add scraped Wiz incidents (24h filtered)
 wiz_incidents = scrape_wiz_incidents()
 for inc in wiz_incidents:
     if inc["link"] not in seen_urls:
@@ -424,7 +432,6 @@ for i, item in enumerate(new_articles, 1):
         f"Content/Context:\n{article_text[:4500]}"
     )
 
-    # Robust Retry Loop for Groq 429 TPM Rate Limit Mitigation
     success = False
     for attempt in range(4):
         try:
@@ -471,12 +478,12 @@ for i, item in enumerate(new_articles, 1):
         "mitre_ttps": data.get('mitre_ttps', ''),
         "hunting_hypothesis": data.get('hunting_hypothesis', ''),
         "successful_exploit_profile": data.get('successful_exploit_profile', ''),
-        "sample_hunt_query": data.get('sample_hunt_query', ''),
+        "sample_hunt_query": defang_ioc(data.get('sample_hunt_query', '')),
         "iocs": extracted_iocs,
         "link": item.get('link', '')
     })
     print(f"    [+] Successfully added briefing to report queue.")
-    time.sleep(3.0) # Additional breathing room between items to stay well under 8K TPM
+    time.sleep(3.0)
 
 with open(SEEN_FILE, "w") as f:
     json.dump({"seen": list(seen_urls)[-1000:]}, f)
@@ -485,13 +492,11 @@ with open(SEEN_FILE, "w") as f:
 try:
     import urllib.request
     from reportlab.lib.pagesizes import letter
-    from reportlab.platypus import SimpleDocTemplate, Paragraph, Spacer, Table, TableStyle, HRFlowable, PageBreak, Image
+    from reportlab.platypus import SimpleDocTemplate, Paragraph, Spacer, Table, TableStyle, HRFlowable, PageBreak
     from reportlab.lib.styles import getSampleStyleSheet, ParagraphStyle
     from reportlab.lib import colors
 
-    PDF_FILENAME = "executive_report.pdf"
-
-    # --- 1. Fetch Live SANS Infocon Data ---
+    # --- Fetch Live SANS Infocon Data ---
     infocon_level = "Normal"
     try:
         url = "https://isc.sans.edu/infocon.txt"
@@ -500,16 +505,14 @@ try:
     except Exception:
         pass
 
-    # Map SANS Infocon levels to professional executive colors
     infocon_colors = {
-        "Green": "#2F855A",   # Forest Green
-        "Yellow": "#D69E2E",  # Amber / Gold
-        "Orange": "#DD6B20",  # Dark Orange
-        "Red": "#E53E3E"      # Crimson Red
+        "Green": "#2F855A",
+        "Yellow": "#D69E2E",
+        "Orange": "#DD6B20",
+        "Red": "#E53E3E"
     }
     status_color = infocon_colors.get(infocon_level, "#2D3748")
 
-    # --- 3. Generate Executive-Friendly Styled PDF Report ---
     doc = SimpleDocTemplate(PDF_FILENAME, pagesize=letter, rightMargin=25, leftMargin=25, topMargin=25, bottomMargin=25)
     styles = getSampleStyleSheet()
 
@@ -534,10 +537,8 @@ try:
 
     story = []
 
-    # Ensure reports variable exists safely
     reports = reports if 'reports' in locals() else []
 
-    # Build dynamic subtitle string with colored status
     subtitle_text = (
         f"Target Scope: Canadian Financial Institution (ACME Finance) | "
         f"Briefings: {len(reports)} | "
@@ -554,7 +555,7 @@ try:
         ]
     ]
 
-    header_table = Table(header_table_data, colWidths=[420, 120])
+    header_table = Table(header_table_data, colWidths=[540])
     header_table.setStyle(TableStyle([
         ('VALIGN', (0,0), (-1,-1), 'MIDDLE'),
         ('LEFTPADDING', (0,0), (-1,-1), 0),
@@ -565,15 +566,13 @@ try:
     story.append(header_table)
     story.append(HRFlowable(width="100%", thickness=1.2, color=colors.HexColor("#1A365D"), spaceAfter=8))
 
-# Uncomment below when ready to build your full document story
-
     if cccs_board:
         story.append(Paragraph("<b>CCCS / Cyber Centre Alerts & Advisories (Canada - Past 24h)</b>", section_heading))
         cccs_table_data = [[Paragraph("<b>Date</b>", cell_bold), Paragraph("<b>Advisory Title & Link</b>", cell_bold)]]
         for item in cccs_board[:6]:
             cccs_table_data.append([
                 Paragraph(item['date'], cell_style),
-                Paragraph(f"<b>{clean_html_tags(item['title'])}</b><br/><font color='#2B6CB0'><u><a href='{item['link']}'>Advisory Link</a></u></font>", cell_style)
+                Paragraph(f"<b>{defang_ioc(clean_html_tags(item['title']))}</b><br/><font color='#2B6CB0'><u><a href='{item['link']}'>Advisory Link</a></u></font>", cell_style)
             ])
         cccs_table = Table(cccs_table_data, colWidths=[65, 475])
         cccs_table.setStyle(TableStyle([
@@ -592,7 +591,7 @@ try:
         fyi_table_data = [[Paragraph("<b>Date</b>", cell_bold), Paragraph("<b>Feed / Source</b>", cell_bold), Paragraph("<b>Headline & Impact Summary</b>", cell_bold)]]
         
         for entry in top_fyi_entries:
-            headline_cell = f"<b>{clean_html_tags(entry['title'])}</b><br/>{clean_html_tags(entry['summary'])}<br/><font color='#2B6CB0'><u><a href='{entry['link']}'>Source Link</a></u></font>"
+            headline_cell = f"<b>{defang_ioc(clean_html_tags(entry['title']))}</b><br/>{defang_ioc(clean_html_tags(entry['summary']))}<br/><font color='#2B6CB0'><u><a href='{entry['link']}'>Source Link</a></u></font>"
             fyi_table_data.append([
                 Paragraph(entry['date'], cell_style),
                 Paragraph(entry['feed'], cell_style),
@@ -610,7 +609,7 @@ try:
         ]))
         story.append(fyi_table)
         story.append(Spacer(1, 6))
-        story.append(Paragraph("<b>Actionable Threat Hunting Briefings & IOC Extraction (Past 24h)</b>", section_heading))
+        story.append(Paragraph("<b>Actionable Threat Hunting Briefings & Defanged IOC Extraction (Past 24h)</b>", section_heading))
 
     if not reports:
         story.append(Paragraph("<b>No critical or high-severity threat briefings met the 24-hour threshold in this execution cycle.</b>", cell_style))
@@ -618,22 +617,23 @@ try:
     for rep in reports:
         def format_bullets(text):
             cleaned = clean_html_tags(text)
+            cleaned = defang_ioc(cleaned)
             cleaned = cleaned.replace('\n• ', '<br/>• ').replace('\n-', '<br/>• ').replace('\n', '<br/>• ')
             if not cleaned.startswith('•') and not cleaned.startswith('<br/>'):
                 cleaned = '• ' + cleaned
             return cleaned
 
         table_data = [
-            [Paragraph(f"<b>[{rep['severity']}] {clean_html_tags(rep['title'])}</b>", cell_bold), Paragraph(f"<b>Date:</b> {clean_html_tags(rep['threat_date'])}", cell_style)],
-            [Paragraph("<b>Source URL</b>", cell_bold), Paragraph(f"<font color='#2B6CB0'><u><a href='{rep['link']}'>{rep['link']}</a></u></font>", cell_style)],
-            [Paragraph("<b>Executive Summary</b>", cell_bold), Paragraph(clean_html_tags(rep['exec_summary']), cell_style)],
-            [Paragraph("<b>Threat Actor & Exploitation</b>", cell_bold), Paragraph(f"<b>Actor:</b> {clean_html_tags(rep['threat_group'])} | <b>Status:</b> {clean_html_tags(rep['exploitation_status'])}", cell_style)],
+            [Paragraph(f"<b>[{rep['severity']}] {defang_ioc(clean_html_tags(rep['title']))}</b>", cell_bold), Paragraph(f"<b>Date:</b> {clean_html_tags(rep['threat_date'])}", cell_style)],
+            [Paragraph("<b>Source URL</b>", cell_bold), Paragraph(f"<font color='#2B6CB0'><u><a href='{rep['link']}'>{defang_ioc(rep['link'])}</a></u></font>", cell_style)],
+            [Paragraph("<b>Executive Summary</b>", cell_bold), Paragraph(defang_ioc(clean_html_tags(rep['exec_summary'])), cell_style)],
+            [Paragraph("<b>Threat Actor & Exploitation</b>", cell_bold), Paragraph(defang_ioc(f"<b>Actor:</b> {clean_html_tags(rep['threat_group'])} | <b>Status:</b> {clean_html_tags(rep['exploitation_status'])}"), cell_style)],
             [Paragraph("<b>Affected Tech / CVEs</b>", cell_bold), Paragraph(format_bullets(rep['affected_tech_cves']), cell_style)],
             [Paragraph("<b>Scope & Telemetry Impact</b>", cell_bold), Paragraph(format_bullets(rep['scope_impact']), cell_style)],
             [Paragraph("<b>MITRE ATT&CK TTPs</b>", cell_bold), Paragraph(format_bullets(rep['mitre_ttps']), cell_style)],
             [Paragraph("<b>Hunting Hypothesis</b>", cell_bold), Paragraph(format_bullets(rep['hunting_hypothesis']), cell_style)],
             [Paragraph("<b>Exploit Profile</b>", cell_bold), Paragraph(format_bullets(rep['successful_exploit_profile']), cell_style)],
-            [Paragraph("<b>Sample Hunt Query</b>", cell_bold), Paragraph(clean_html_tags(rep['sample_hunt_query']), code_cell_style)],
+            [Paragraph("<b>Sample Hunt Query (Defanged)</b>", cell_bold), Paragraph(clean_html_tags(rep['sample_hunt_query']), code_cell_style)],
         ]
         
         iocs = rep['iocs']
@@ -645,7 +645,7 @@ try:
         if iocs['packages']: ioc_summary_lines.append(f"<b>Packages ({len(iocs['packages'])}):</b> " + ", ".join(iocs['packages'][:10]))
         
         if ioc_summary_lines:
-            table_data.append([Paragraph("<b>Extracted IOCs</b>", cell_bold), Paragraph("<br/>".join(ioc_summary_lines), cell_style)])
+            table_data.append([Paragraph("<b>Extracted IOCs (Defanged)</b>", cell_bold), Paragraph("<br/>".join(ioc_summary_lines), cell_style)])
             
         t = Table(table_data, colWidths=[130, 410])
         t.setStyle(TableStyle([
@@ -692,7 +692,7 @@ if os.path.exists(PDF_FILENAME):
     msg['Subject'] = f"[Agentic Threat Intel Digest] Strategic Hunt & {len(reports)} Briefing(s)"
     msg['From'] = os.environ["GMAIL_USER"]
     msg['To'] = os.environ["GMAIL_RECIPIENT"]
-    msg.set_content("Please find attached the latest Executive Threat Intelligence & Hunting Digest PDF containing prioritized threat briefings, extracted IOCs, sample hunting queries, CCCS/CSIS alerts, and the Global Threat Outlook telemetry page.")
+    msg.set_content("Please find attached the latest Executive Threat Intelligence & Hunting Digest PDF containing prioritized threat briefings, defanged IOCs, sample hunting queries, CCCS/CSIS alerts, and the Global Threat Outlook telemetry page.")
 
     with open(PDF_FILENAME, "rb") as f:
         pdf_data = f.read()
